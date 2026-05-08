@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(openspec status *)",
+      "Bash(openspec instructions *)",
+      "Bash(gcc -Wall -Wextra -O2 -DUNICODE -D_UNICODE -municode -o backup.exe main.c)",
+      "Bash(gcc -Wall -Wextra -O2 -DUNICODE -D_UNICODE -o backup.exe main.c)",
+      "Bash(windres -o resource.o resource.rc)",
+      "Bash(gcc -Wall -Wextra -O2 -DUNICODE -D_UNICODE -o backup.exe main.c resource.o)"
+    ]
+  }
+}

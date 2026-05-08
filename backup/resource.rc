@@ -1,0 +1,6 @@
+/*
+ * 资料备份工具 - 应用图标资源
+ * 图标 ID: 101
+ */
+
+IDI_APP_ICON ICON "databak.ico"

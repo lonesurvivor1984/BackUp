@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make)",
+      "Bash(/d/WorkGroup/x86_64-8.1.0-release-win32-sjlj-rt_v6-rev0/mingw64/bin/windres -o resource.o resource.rc)",
+      "Bash(/d/WorkGroup/x86_64-8.1.0-release-win32-sjlj-rt_v6-rev0/mingw64/bin/gcc -Wall -Wextra -O2 -DUNICODE -D_UNICODE -o backup.exe main.c resource.o)",
+      "Bash(echo \"EXIT: $?\")"
+    ]
+  }
+}
