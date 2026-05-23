@@ -107,7 +107,7 @@ int parse_directory_input(PathList *list) {
     list->count = 0;
 
     printf("\n请输入要备份的目录路径：\n");
-    printf("  - 多个目录用分号 (;) 分隔\n");
+    printf("  - 多个目录用分号 (; 或 ；) 分隔\n");
     printf("  - 例如：C:\\Documents;D:\\Photos\n");
     printf("\n目录路径：");
 
@@ -125,7 +125,7 @@ int parse_directory_input(PathList *list) {
     MultiByteToWideChar(CP_UTF8, 0, input, -1, w_input, MAX_INPUT_LEN);
 
     /* 解析分号分隔的路径 */
-    wchar_t *token = wcstok(w_input, L";");
+    wchar_t *token = wcstok(w_input, L";；");
     while (token != NULL && list->count < MAX_PATHS) {
         wchar_t *start = token;
         while (*start == L' ' || *start == L'\t') start++;
@@ -137,7 +137,7 @@ int parse_directory_input(PathList *list) {
             list->paths[list->count][MAX_PATH_LEN - 1] = L'\0';
             list->count++;
         }
-        token = wcstok(NULL, L";");
+        token = wcstok(NULL, L";；");
     }
 
     if (list->count == 0) {
