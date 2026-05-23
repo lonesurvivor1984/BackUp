@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <wchar.h>
 #include <locale.h>
 #include <time.h>
@@ -22,11 +23,58 @@ static int g_files_copied = 0;
 static int g_files_skipped = 0;
 static int g_files_failed = 0;
 static int g_fat32_warning_shown = 0;
+static FILE *g_log = NULL;
 
 /* 显示错误信息 */
 void print_error(const char *msg) {
     DWORD err = GetLastError();
     fprintf(stderr, "[错误] %s (错误代码：%lu)\n", msg, err);
+}
+
+/* 日志写入 */
+void log_write(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    if (g_log) {
+        vfprintf(g_log, fmt, args);
+        fflush(g_log);
+    }
+    vfprintf(stdout, fmt, args);
+    va_end(args);
+}
+
+/* 打开日志文件 */
+int log_open(const wchar_t *dest_folder) {
+    wchar_t log_path[MAX_PATH];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    swprintf(log_path, MAX_PATH, L"%s\\backup_log_%04d%02d%02d_%02d%02d%02d.txt",
+             dest_folder, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    g_log = _wfopen(log_path, L"w, ccs=UTF-8");
+    if (g_log) {
+        log_write("=== 备份日志 ===\n");
+        log_write("开始时间：%04d-%02d-%02d %02d:%02d:%02d\n",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        log_write("----------------------------------------\n\n");
+        return 0;
+    }
+    return -1;
+}
+
+/* 关闭日志文件 */
+void log_close() {
+    if (g_log) {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        fprintf(g_log, "\n----------------------------------------\n");
+        fprintf(g_log, "结束时间：%04d-%02d-%02d %02d:%02d:%02d\n",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        fprintf(g_log, "总计文件：%d  成功：%d  跳过：%d  失败：%d\n",
+            g_files_copied + g_files_skipped + g_files_failed,
+            g_files_copied, g_files_skipped, g_files_failed);
+        fclose(g_log);
+        g_log = NULL;
+    }
 }
 
 /* 输入行 */
@@ -285,34 +333,48 @@ int create_timestamp_folder(const wchar_t *drive_path, wchar_t *dest_path, int m
 
 /* 拷贝文件 */
 int copy_file_with_progress(const wchar_t *src, const wchar_t *dst, int is_fat32) {
+    char mb_src[MAX_PATH * 3];
+    WideCharToMultiByte(CP_UTF8, 0, src, -1, mb_src, sizeof(mb_src), NULL, NULL);
+
     WIN32_FILE_ATTRIBUTE_DATA attr;
+    ULARGE_INTEGER file_size = {{0}};
+    int got_attrs = 0;
+
     if (GetFileAttributesExW(src, GetFileExInfoStandard, &attr)) {
-        ULARGE_INTEGER file_size;
         file_size.LowPart = attr.nFileSizeLow;
         file_size.HighPart = attr.nFileSizeHigh;
+        got_attrs = 1;
 
         if (is_fat32 && file_size.QuadPart > 4294967295ULL && !g_fat32_warning_shown) {
-            char mb_src[MAX_PATH * 3];
-            WideCharToMultiByte(CP_UTF8, 0, src, -1, mb_src, sizeof(mb_src), NULL, NULL);
-            printf("  [警告] FAT32 不支持大于 4GB 的文件：%s\n", mb_src);
+            log_write("  [警告] FAT32 不支持大于 4GB 的文件：%s\n", mb_src);
+            log_write("  [日志] 源路径: %s\n", mb_src);
             g_fat32_warning_shown = 1;
             g_files_skipped++;
             return -1;
         }
     }
 
+    /* 拷贝前显示进度 */
+    if (got_attrs && file_size.QuadPart > 0) {
+        log_write("[%d+] > %s (%.2f MB)\n",
+            g_files_copied + g_files_skipped + g_files_failed + 1,
+            mb_src,
+            (double)file_size.QuadPart / (1024 * 1024));
+    } else {
+        log_write("[%d+] > %s\n",
+            g_files_copied + g_files_skipped + g_files_failed + 1,
+            mb_src);
+    }
+
     if (CopyFileW(src, dst, FALSE)) {
         g_files_copied++;
-        char mb_src[MAX_PATH * 3];
-        WideCharToMultiByte(CP_UTF8, 0, src, -1, mb_src, sizeof(mb_src), NULL, NULL);
-        printf("  + %s\n", mb_src);
+        log_write("[%d+] OK\n",
+            g_files_copied + g_files_skipped + g_files_failed);
         return 0;
     } else {
         DWORD err = GetLastError();
         g_files_failed++;
-        char mb_src[MAX_PATH * 3];
-        WideCharToMultiByte(CP_UTF8, 0, src, -1, mb_src, sizeof(mb_src), NULL, NULL);
-        printf("  x %s (错误：%lu)\n", mb_src, err);
+        log_write("  x %s (错误：%lu)\n", mb_src, err);
         return -1;
     }
 }
@@ -340,6 +402,28 @@ int copy_directory_recursive(const wchar_t *src_dir, const wchar_t *rel_path,
     do {
         if (wcscmp(find_data.cFileName, L".") == 0 ||
             wcscmp(find_data.cFileName, L"..") == 0) {
+            continue;
+        }
+
+        /* 跳过 junction / symlink，防止无限递归 */
+        if (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            char mb_name[MAX_PATH * 3];
+            WideCharToMultiByte(CP_UTF8, 0, find_data.cFileName, -1,
+                mb_name, sizeof(mb_name), NULL, NULL);
+            log_write("  [跳过] %s (链接)\n", mb_name);
+            g_files_skipped++;
+            continue;
+        }
+
+        /* 检查路径长度，超长则跳过 */
+        size_t src_len = wcslen(src_dir) + 1 + wcslen(rel_path) +
+            wcslen(find_data.cFileName) + 4;
+        if (src_len >= MAX_PATH) {
+            char mb_name[MAX_PATH * 3];
+            WideCharToMultiByte(CP_UTF8, 0, find_data.cFileName, -1,
+                mb_name, sizeof(mb_name), NULL, NULL);
+            log_write("  [跳过] %s (路径过长)\n", mb_name);
+            g_files_skipped++;
             continue;
         }
 
@@ -555,10 +639,19 @@ int main() {
     /* 步骤 5: 执行备份 */
     printf("\n开始备份...\n\n");
 
+    /* 打开日志文件 */
+    log_open(dest_folder);
+    for (int i = 0; i < paths.count; i++) {
+        char mb_path[MAX_PATH * 3];
+        WideCharToMultiByte(CP_UTF8, 0, paths.paths[i], -1, mb_path, sizeof(mb_path), NULL, NULL);
+        log_write("源目录 %d: %s\n", i + 1, mb_path);
+    }
+    log_write("\n");
+
     /* 检查 FAT32 */
     int is_fat32 = check_fat32_limit(drives[selected_drive].path);
     if (is_fat32) {
-        printf("[警告] 目标驱动器为 FAT32 格式，不支持单文件大于 4GB\n\n");
+        log_write("[警告] 目标驱动器为 FAT32 格式，不支持单文件大于 4GB\n\n");
     }
 
     for (int i = 0; i < paths.count; i++) {
@@ -585,7 +678,8 @@ int main() {
         copy_directory_recursive(paths.paths[i], L"", src_dir_dest, is_fat32);
     }
 
-    /* 步骤 6: 显示报告 */
+    /* 步骤 6: 关闭日志并显示报告 */
+    log_close();
     print_final_report();
 
     wait_for_exit();
